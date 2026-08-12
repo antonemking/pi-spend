@@ -90,11 +90,14 @@ factory dashboard.
 
 ```jsonc
 {
-  // roles in your model economy; regex against "provider/model"
+  // roles in your model economy; regex against "provider/model".
+  // billing "subscription" tracks token volume and forces cost to zero,
+  // because pricing subscription tokens at list rates invents money you
+  // never spent. "api" (the default) records real per-token dollars.
   "families": [
-    { "match": "gpt-|codex", "family": "workhorse" },
-    { "match": "kimi|k[23]", "family": "adversary" },
-    { "match": "claude", "family": "reserve" }
+    { "match": "gpt-|codex", "family": "workhorse", "billing": "subscription" },
+    { "match": "kimi|k[23]", "family": "adversary", "billing": "api" },
+    { "match": "claude", "family": "reserve", "billing": "api" }
   ],
   // USD budgets per family
   "budgets": {
@@ -112,10 +115,16 @@ factory dashboard.
 }
 ```
 
-Families are computed at read time, so editing the rules re-buckets your
-entire history. Flat-rate subscription models record cost 0; their token
-volume is still tracked, which is the number that matters for context
-discipline.
+Families **and billing are computed at read time**, so editing the rules
+re-buckets and re-values your entire history without re-capturing anything.
+Move a model from a subscription onto metered credits and one word in this
+file turns its past volume into priced spend.
+
+That read-time billing switch is the difference between a real number and a
+fictional one. A subscription covers its tokens; multiplying them by list
+rates produces a figure that looks like money and isn't. pi-spend reports
+those rows at zero and keeps the volume, which is the number that actually
+governs context discipline.
 
 ## Other runtimes
 

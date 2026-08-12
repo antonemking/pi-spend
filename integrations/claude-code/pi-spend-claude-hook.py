@@ -40,12 +40,14 @@ PRICES = {
     r"haiku": (1.0, 5.0, 0.1, 1.25),
 }
 
-ALWAYS_PHASES = [
-    (r"(^|/)scout/", "scout"),
-    (r"(^|/)plan\.json$", "plan"),
-    (r"(^|/)\.kiln/reviews/", "review"),
-    (r"(^|/)decisions/", "decide"),
+DEFAULT_PHASE_RULES = [
+    (r"^scout/", "scout"),
+    (r"^plan\.json$", "plan"),
+    (r"^\.kiln/reviews/", "review"),
+    (r"^decisions/", "decide"),
 ]
+
+WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "str_replace"}
 
 
 def db_path():
@@ -56,18 +58,29 @@ def db_path():
     return home / "spend.db"
 
 
-def load_prices():
-    prices = dict(PRICES)
+def load_config():
     cfg_path = Path(os.environ.get("PI_SPEND_HOME",
                     Path.home() / ".local" / "share" / "pi-spend")) / "config.json"
     try:
-        user = json.loads(cfg_path.read_text()).get("claudePrices", {})
-        for pattern, vals in user.items():
-            if isinstance(vals, list) and len(vals) == 4:
-                prices[pattern] = tuple(vals)
+        return json.loads(cfg_path.read_text())
     except Exception:
-        pass
+        return {}
+
+
+def load_prices(cfg):
+    prices = dict(PRICES)
+    for pattern, vals in (cfg.get("claudePrices") or {}).items():
+        if isinstance(vals, list) and len(vals) == 4:
+            prices[pattern] = tuple(vals)
     return prices
+
+
+def load_phase_rules(cfg):
+    rules = []
+    for r in cfg.get("phaseRules") or []:
+        if isinstance(r, dict) and r.get("match") and r.get("phase"):
+            rules.append((r["match"], r["phase"]))
+    return rules or list(DEFAULT_PHASE_RULES)
 
 
 def cost_of(model, usage, prices):
@@ -80,23 +93,76 @@ def cost_of(model, usage, prices):
     return 0.0
 
 
-def kiln_phase(cwd):
-    """Phase from KILN state if the project runs it: in-progress issue -> build."""
-    d = Path(cwd or ".")
+def project_root(cwd):
+    """Nearest ancestor holding workflow state, else the git root, else cwd."""
+    d = Path(cwd).resolve() if cwd else Path.cwd()
+    git_root = None
     for cand in [d, *d.parents]:
-        issues = cand / ".kiln" / "issues.jsonl"
-        if issues.is_file():
-            merged = {}
-            for line in issues.read_text().splitlines():
-                try:
-                    rec = json.loads(line)
-                    merged[rec.get("id")] = rec
-                except Exception:
-                    continue
-            for rec in merged.values():
-                if rec.get("status") == "in_progress":
-                    return "build", rec.get("id", "")
-            return "other", ""
+        if (cand / ".kiln").is_dir():
+            return cand, True
+        if git_root is None and (cand / ".git").exists():
+            git_root = cand
+    return (git_root or d), False
+
+
+def state_phase(root):
+    """Exact phase from a JSONL state file: an in-progress issue means build."""
+    issues = root / ".kiln" / "issues.jsonl"
+    if not issues.is_file():
+        return None
+    merged = {}
+    try:
+        for line in issues.read_text().splitlines():
+            try:
+                rec = json.loads(line)
+                merged[rec.get("id")] = rec
+            except Exception:
+                continue
+    except Exception:
+        return None
+    for rec in merged.values():
+        if rec.get("status") == "in_progress":
+            return "build", rec.get("id", "")
+    return None
+
+
+def written_paths(records, root):
+    """Repo-relative paths this session wrote, from tool_use blocks."""
+    out = []
+    for rec in records:
+        msg = rec.get("message") or {}
+        for block in msg.get("content") or []:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            if block.get("name") not in WRITE_TOOLS:
+                continue
+            p = (block.get("input") or {}).get("file_path") \
+                or (block.get("input") or {}).get("path")
+            if not isinstance(p, str) or not p:
+                continue
+            try:
+                rel = os.path.relpath(os.path.abspath(p), root)
+            except Exception:
+                continue
+            if not rel.startswith(".."):
+                out.append(rel)
+    return out
+
+
+def resolve_phase(root, has_state, records, rules):
+    """Same two signals the pi extension uses: explicit state, then writes."""
+    if has_state:
+        hit = state_phase(root)
+        if hit:
+            return hit
+    paths = written_paths(records, str(root))
+    for pattern, phase in rules:
+        try:
+            rx = re.compile(pattern)
+        except re.error:
+            continue
+        if any(rx.search(p) for p in paths):
+            return phase, ""
     return "other", ""
 
 
@@ -127,16 +193,27 @@ def main():
     if not transcript or not Path(transcript).is_file():
         sys.exit(0)
 
-    prices = load_prices()
-    phase, label = kiln_phase(cwd)
-    repo = Path(cwd).name if cwd else ""
+    cfg = load_config()
+    prices = load_prices(cfg)
+    rules = load_phase_rules(cfg)
 
-    rows = []
+    records = []
     for line in Path(transcript).read_text().splitlines():
         try:
-            rec = json.loads(line)
+            records.append(json.loads(line))
         except Exception:
             continue
+
+    # A transcript's own records carry the cwd; trust them over the payload,
+    # which is absent when backfilling history.
+    if not cwd:
+        cwd = next((r.get("cwd") for r in records if r.get("cwd")), "")
+    root, has_state = project_root(cwd)
+    phase, label = resolve_phase(root, has_state, records, rules)
+    repo = root.name
+
+    rows = []
+    for rec in records:
         if rec.get("type") != "assistant":
             continue
         msg = rec.get("message") or {}
@@ -144,12 +221,16 @@ def main():
         if not usage:
             continue
         model = msg.get("model", "")
+        # Claude Code emits placeholder assistant turns (interrupts, errors)
+        # with a synthetic model and no real usage. Not spend.
+        if not model or model.startswith("<"):
+            continue
         rows.append((
             "claude",
             session_id or rec.get("sessionId", ""),
             rec.get("uuid", ""),
             rec.get("timestamp", ""),
-            cwd, repo, phase, label,
+            str(root), repo, phase, label,
             "anthropic", model,
             usage.get("input_tokens", 0),
             usage.get("output_tokens", 0),

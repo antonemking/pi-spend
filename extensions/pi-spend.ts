@@ -82,7 +82,7 @@ export default function (pi: ExtensionAPI) {
       });
     }
     const all = s.rows("runtime = ? AND session_id = ?", ["pi", sessionId]);
-    const t = grandTotal(all);
+    const t = grandTotal(all, cfg);
     return { cost: t.cost, tokens: tokensOf(t) };
   }
 

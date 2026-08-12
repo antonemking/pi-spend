@@ -5,8 +5,18 @@
  */
 
 import type { SpendConfig } from "./config.ts";
-import { familyOf } from "./config.ts";
+import { familyOf, isSubscription } from "./config.ts";
 import { Store } from "./store.ts";
+
+/**
+ * Billed cost for a row. Subscription families report zero: their tokens are
+ * already paid for, and pricing them at list rates invents money that was
+ * never spent. Applied at read time so a billing change re-values history.
+ */
+export function costOf(cfg: SpendConfig, row: Record<string, unknown>): number {
+  if (isSubscription(cfg, String(row.provider ?? ""), String(row.model ?? ""))) return 0;
+  return Number(row.cost ?? 0);
+}
 
 export interface Totals {
   cost: number;
@@ -70,7 +80,7 @@ export function totalsBy(
   for (const r of rows) {
     const k = keyFor(dim, r, cfg);
     const t = out.get(k) ?? emptyTotals();
-    t.cost += Number(r.cost ?? 0);
+    t.cost += costOf(cfg, r);
     t.input += Number(r.input ?? 0);
     t.output += Number(r.output ?? 0);
     t.cache_read += Number(r.cache_read ?? 0);
@@ -81,10 +91,10 @@ export function totalsBy(
   return out;
 }
 
-export function grandTotal(rows: Record<string, unknown>[]): Totals {
+export function grandTotal(rows: Record<string, unknown>[], cfg?: SpendConfig): Totals {
   const t = emptyTotals();
   for (const r of rows) {
-    t.cost += Number(r.cost ?? 0);
+    t.cost += cfg ? costOf(cfg, r) : Number(r.cost ?? 0);
     t.input += Number(r.input ?? 0);
     t.output += Number(r.output ?? 0);
     t.cache_read += Number(r.cache_read ?? 0);
@@ -103,13 +113,14 @@ export function dailySeries(
   rows: Record<string, unknown>[],
   days: number,
   metric: "cost" | "tokens",
+  cfg?: SpendConfig,
 ): { labels: string[]; values: number[] } {
   const byDay = new Map<string, number>();
   for (const r of rows) {
     const day = String(r.at ?? "").slice(0, 10);
     const v =
       metric === "cost"
-        ? Number(r.cost ?? 0)
+        ? (cfg ? costOf(cfg, r) : Number(r.cost ?? 0))
         : Number(r.input ?? 0) + Number(r.output ?? 0) +
           Number(r.cache_read ?? 0) + Number(r.cache_write ?? 0);
     byDay.set(day, (byDay.get(day) ?? 0) + v);
@@ -142,7 +153,7 @@ export function burndown(
       b.period === "monthly" ? { sinceIso: monthStart, family } : { family },
       cfg,
     );
-    out.push({ family, spent: grandTotal(rows).cost, budget: b.amount, period: b.period });
+    out.push({ family, spent: grandTotal(rows, cfg).cost, budget: b.amount, period: b.period });
   }
   return out;
 }

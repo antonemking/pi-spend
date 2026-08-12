@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dbPath, loadConfig } from "../src/config.ts";
+import { DEFAULT_CONFIG, dbPath, loadConfig } from "../src/config.ts";
 import { Store, type SpendEvent } from "../src/store.ts";
 import { dashboard, sectionBy, budgetSection } from "../src/dashboard.ts";
 import { load, grandTotal, tokensOf, dailySeries } from "../src/aggregate.ts";
@@ -83,9 +83,9 @@ switch (cmd) {
     const n = Number(positional[1] ?? 30);
     const store = new Store();
     const rows = load(store, filters, cfg);
-    const total = grandTotal(rows);
+    const total = grandTotal(rows, cfg);
     const metric = total.cost > 0 ? "cost" : "tokens";
-    const series = dailySeries(rows, n, metric as "cost" | "tokens");
+    const series = dailySeries(rows, n, metric as "cost" | "tokens", cfg);
     if (flags.json) {
       jsonOut(series);
     } else {
@@ -192,7 +192,9 @@ switch (cmd) {
       }
     }
 
-    console.log("\n" + dashboard(store, cfg, {}, 14) + "\n");
+    // Canned illustration: render against shipped defaults, not local config,
+    // so the demo looks the same for everyone evaluating the package.
+    console.log("\n" + dashboard(store, DEFAULT_CONFIG, {}, 14) + "\n");
     console.log(
       dim("  demo data in a throwaway db, your ledger is untouched.\n" +
           "  note the reserve showing up under `build`: that is the pattern\n" +

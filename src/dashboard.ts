@@ -4,6 +4,7 @@
 
 import { barChart, colorFor, dim, fmtMoney, fmtTokens, gauge, heading, paint, sparkline, stackedBar } from "./charts.ts";
 import type { SpendConfig } from "./config.ts";
+import { hasSubscriptionFamily } from "./config.ts";
 import { dailySeries, burndown, grandTotal, load, tokensOf, totalsBy, type Dimension, type Filters, type Totals } from "./aggregate.ts";
 import { Store } from "./store.ts";
 
@@ -49,8 +50,8 @@ export function budgetSection(store: Store, cfg: SpendConfig): string {
 
 export function dashboard(store: Store, cfg: SpendConfig, f: Filters, days = 30): string {
   const rows = load(store, f, cfg);
-  const total = grandTotal(rows);
-  const daily = dailySeries(rows, days, total.cost > 0 ? "cost" : "tokens");
+  const total = grandTotal(rows, cfg);
+  const daily = dailySeries(rows, days, total.cost > 0 ? "cost" : "tokens", cfg);
   const spent = daily.values.reduce((s, v) => s + v, 0);
 
   // The stacked bar shows TOKEN share (volume): flat-rate workhorses would
@@ -84,6 +85,11 @@ export function dashboard(store: Store, cfg: SpendConfig, f: Filters, days = 30)
     out.push("");
     out.push(budgets);
   }
+  if (hasSubscriptionFamily(cfg)) {
+    out.push("");
+    out.push(dim("  $0 rows are flat-rate, not free: their tokens are covered by a"));
+    out.push(dim("  subscription, so volume is the number that matters there."));
+  }
   return out.join("\n");
 }
 
@@ -94,7 +100,7 @@ export function sessionWidget(
   sessionId: string,
 ): string[] {
   const rows = store.rows("runtime = ? AND session_id = ?", ["pi", sessionId]);
-  const total = grandTotal(rows);
+  const total = grandTotal(rows, cfg);
   const byPhase = sortByCostThenTokens(totalsBy(rows, "phase", cfg));
   const phaseLine = byPhase
     .map(([p, t]) => `${p} ${t.cost > 0 ? fmtMoney(t.cost) : fmtTokens(tokensOf(t))}`)

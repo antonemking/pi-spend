@@ -19,6 +19,19 @@ import { join } from "node:path";
 export interface FamilyRule {
   match: string; // case-insensitive regex tested against "provider/model"
   family: string;
+  /**
+   * How this family is paid for.
+   *
+   *   "api"          per-token billing; recorded cost is real money.
+   *   "subscription" flat rate; token volume is tracked and cost is forced
+   *                  to zero, because list-price arithmetic on tokens a
+   *                  subscription already covers is a fictional number.
+   *
+   * Defaults to "api". Billing is applied at read time, so flipping a
+   * family from subscription to api (a plan change, a move to credits)
+   * re-values your whole history without re-capturing anything.
+   */
+  billing?: "api" | "subscription";
 }
 
 export interface Budget {
@@ -47,9 +60,9 @@ export interface SpendConfig {
 
 export const DEFAULT_CONFIG: SpendConfig = {
   families: [
-    { match: "gpt-|codex", family: "workhorse" },
-    { match: "kimi|k[23]", family: "adversary" },
-    { match: "claude", family: "reserve" },
+    { match: "gpt-|codex", family: "workhorse", billing: "subscription" },
+    { match: "kimi|k[23]", family: "adversary", billing: "api" },
+    { match: "claude", family: "reserve", billing: "api" },
   ],
   budgets: {
     reserve: { amount: 50, period: "lifetime" },
@@ -90,14 +103,28 @@ export function loadConfig(): SpendConfig {
   }
 }
 
-export function familyOf(cfg: SpendConfig, provider: string, model: string): string {
+function ruleFor(cfg: SpendConfig, provider: string, model: string): FamilyRule | null {
   const hay = `${provider}/${model}`;
   for (const rule of cfg.families) {
     try {
-      if (new RegExp(rule.match, "i").test(hay)) return rule.family;
+      if (new RegExp(rule.match, "i").test(hay)) return rule;
     } catch {
       /* bad user regex, skip the rule */
     }
   }
-  return "other";
+  return null;
+}
+
+export function familyOf(cfg: SpendConfig, provider: string, model: string): string {
+  return ruleFor(cfg, provider, model)?.family ?? "other";
+}
+
+/** True when this model's cost should be suppressed as already-paid-for. */
+export function isSubscription(cfg: SpendConfig, provider: string, model: string): boolean {
+  return ruleFor(cfg, provider, model)?.billing === "subscription";
+}
+
+/** True when any family is flat-rate, so the UI can caveat token-only rows. */
+export function hasSubscriptionFamily(cfg: SpendConfig): boolean {
+  return cfg.families.some((r) => r.billing === "subscription");
 }

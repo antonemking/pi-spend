@@ -92,9 +92,18 @@ export function stackedBar(title: string, parts: BarRow[], width = 58): string {
   return lines.join("\n");
 }
 
-/** Sparkline over a numeric series. */
-export function sparkline(title: string, values: number[], detail = ""): string {
+/** Sparkline over a numeric series. Long windows bucket down to stay legible. */
+export function sparkline(title: string, values: number[], detail = "", maxWidth = 60): string {
   if (!values.length) return `${paint(title, 250, true)}\n  ${dim("(no data)")}`;
+  if (values.length > maxWidth) {
+    const size = Math.ceil(values.length / maxWidth);
+    const bucketed: number[] = [];
+    for (let i = 0; i < values.length; i += size) {
+      bucketed.push(values.slice(i, i + size).reduce((s, v) => s + v, 0));
+    }
+    values = bucketed;
+    title += dim(` · ${size}d buckets`);
+  }
   const max = Math.max(...values);
   const line = values
     .map((v) => {
