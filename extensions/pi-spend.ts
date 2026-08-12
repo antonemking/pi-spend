@@ -8,8 +8,9 @@
  * so the dashboard shows your whole model economy, not one harness.
  *
  * In-session:
- *   /spend        toggle the mini dashboard widget
- *   /spend full   print the full dashboard into the terminal
+ *   /spend        toggle the mini dashboard widget (pi caps widgets at ten
+ *                 lines, so this is a summary by construction)
+ *   /spend full   one-line totals plus a pointer to the CLI
  *   footer        live session total (config: footer)
  *
  * Anywhere:
@@ -23,12 +24,30 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, loadRepoConfig } from "../src/config.ts";
 import { Store } from "../src/store.ts";
-import { dashboard, sessionWidget } from "../src/dashboard.ts";
+import { sessionWidget, WIDGET_LINES } from "../src/dashboard.ts";
 import { fmtMoney, fmtTokens } from "../src/charts.ts";
 import { findProjectRoot, PhaseTracker, repoNameOf } from "../src/phase.ts";
 import { grandTotal, tokensOf } from "../src/aggregate.ts";
 
 const WRITE_TOOLS = new Set(["write", "edit", "multi_edit", "str_replace"]);
+
+/**
+ * Call a pi UI method without ever being able to take the session down.
+ *
+ * Several ctx.ui methods return promises. A synchronous try/catch does not
+ * catch their rejections, so a bad call escapes as an unhandled rejection
+ * and pi exits on uncaughtException. Telemetry must never be able to do
+ * that: await the result inside the guard and swallow whatever comes back.
+ */
+async function safeUi(ctx: any, method: string, ...args: unknown[]): Promise<void> {
+  try {
+    const fn = ctx?.ui?.[method];
+    if (typeof fn !== "function") return;
+    await Promise.resolve(fn.call(ctx.ui, ...args));
+  } catch {
+    /* a telemetry extension has no business interrupting a session */
+  }
+}
 
 export default function (pi: ExtensionAPI) {
   let cfg = loadConfig();
@@ -88,20 +107,22 @@ export default function (pi: ExtensionAPI) {
     return { cost: t.cost, tokens: tokensOf(t) };
   }
 
-  function refreshUi(ctx: any, totals: { cost: number; tokens: number }): void {
-    if (cfg.footer && ctx.ui?.setStatus) {
-      ctx.ui.setStatus("pi-spend", `${fmtMoney(totals.cost)} · ${fmtTokens(totals.tokens)}`);
+  async function refreshUi(ctx: any, totals: { cost: number; tokens: number }): Promise<void> {
+    if (cfg.footer) {
+      await safeUi(ctx, "setStatus", "pi-spend",
+        `${fmtMoney(totals.cost)} · ${fmtTokens(totals.tokens)}`);
     }
-    if (widgetOn && ctx.ui?.setWidget) {
+    if (widgetOn) {
       const sessionId = String(ctx.sessionManager?.getSessionId?.() ?? "");
-      ctx.ui.setWidget("pi-spend", sessionWidget(getStore(), cfg, sessionId));
+      const lines = sessionWidget(getStore(), cfg, sessionId).slice(0, WIDGET_LINES);
+      await safeUi(ctx, "setWidget", "pi-spend", lines);
     }
   }
 
   pi.on("session_start", async (_event: any, ctx: any) => {
     try {
       initProject(String(ctx.cwd ?? process.cwd()));
-      refreshUi(ctx, sync(ctx));
+      await refreshUi(ctx, sync(ctx));
     } catch {
       /* fail open */
     }
@@ -121,7 +142,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("turn_end", async (_event: any, ctx: any) => {
     try {
-      refreshUi(ctx, sync(ctx));
+      await refreshUi(ctx, sync(ctx));
     } catch {
       /* fail open */
     }
@@ -138,29 +159,33 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("spend", {
-    description: "Spend telemetry: /spend toggles the widget, /spend full prints the dashboard",
+    description: "Spend telemetry: /spend toggles the widget, /spend full shows totals",
     handler: async (args: string, ctx: any) => {
       try {
         const arg = (args ?? "").trim();
+
         if (arg === "full") {
-          const text = dashboard(getStore(), cfg, {});
-          if (ctx.ui?.custom) {
-            ctx.ui.custom(text);
-          } else {
-            console.log("\n" + text + "\n");
-          }
+          // pi truncates widgets at ten lines and ctx.ui.custom wants a
+          // component factory, so the full dashboard belongs in a terminal,
+          // not in here. Summarise and point at the CLI.
+          const rows = getStore().rows();
+          const t = grandTotal(rows, cfg);
+          await safeUi(ctx, "notify",
+            `pi-spend: ${fmtMoney(t.cost)} · ${fmtTokens(tokensOf(t))} tokens · ${t.events} calls. ` +
+            `Run "pi-spend" in a shell for the full dashboard.`, "info");
           return;
         }
+
         widgetOn = !widgetOn;
         if (widgetOn) {
-          refreshUi(ctx, sync(ctx));
-          ctx.ui?.notify?.("pi-spend widget on. /spend to hide, /spend full for the big picture.", "info");
+          await refreshUi(ctx, sync(ctx));
+          await safeUi(ctx, "notify", "pi-spend widget on. /spend to hide.", "info");
         } else {
-          ctx.ui?.setWidget?.("pi-spend", undefined);
-          ctx.ui?.notify?.("pi-spend widget off.", "info");
+          await safeUi(ctx, "setWidget", "pi-spend", undefined);
+          await safeUi(ctx, "notify", "pi-spend widget off.", "info");
         }
       } catch (e: any) {
-        ctx.ui?.notify?.(`pi-spend: ${e?.message ?? e}`, "error");
+        await safeUi(ctx, "notify", `pi-spend: ${e?.message ?? e}`, "error");
       }
     },
   });

@@ -93,20 +93,40 @@ export function dashboard(store: Store, cfg: SpendConfig, f: Filters, days = 30)
   return out.join("\n");
 }
 
-/** Compact widget for pi's setWidget: a few lines, current session focus. */
+/**
+ * Compact widget for pi's setWidget. Hard-capped at WIDGET_LINES: pi
+ * truncates anything longer, so the cap lives here where the content is
+ * chosen rather than being applied blindly at the edge.
+ */
+export const WIDGET_LINES = 9;
+
 export function sessionWidget(
   store: Store,
   cfg: SpendConfig,
   sessionId: string,
 ): string[] {
-  const rows = store.rows("runtime = ? AND session_id = ?", ["pi", sessionId]);
-  const total = grandTotal(rows, cfg);
-  const byPhase = sortByCostThenTokens(totalsBy(rows, "phase", cfg));
-  const phaseLine = byPhase
-    .map(([p, t]) => `${p} ${t.cost > 0 ? fmtMoney(t.cost) : fmtTokens(tokensOf(t))}`)
-    .join("  ");
-  return [
-    `pi-spend session: ${fmtMoney(total.cost)} · ${fmtTokens(tokensOf(total))} tok · ${total.events} msgs`,
-    phaseLine || "(no usage yet)",
+  const mine = store.rows("runtime = ? AND session_id = ?", ["pi", sessionId]);
+  const session = grandTotal(mine, cfg);
+  const all = grandTotal(store.rows(), cfg);
+
+  const out = [
+    `pi-spend · this session ${fmtMoney(session.cost)} · ${fmtTokens(tokensOf(session))} tok · ${session.events} msgs`,
+    dim(`  all runtimes ${fmtMoney(all.cost)} · ${fmtTokens(tokensOf(all))} tok`),
   ];
+
+  const phases = sortByCostThenTokens(totalsBy(store.rows(), "phase", cfg)).slice(0, 3);
+  if (phases.length) {
+    out.push("");
+    out.push(paint("top phases", 250, true));
+    for (const [p, t] of phases) {
+      out.push(`  ${p.padEnd(8)} ${fmtMoney(t.cost)} ${dim("·")} ${fmtTokens(tokensOf(t))}`);
+    }
+  }
+
+  for (const b of burndown(store, cfg)) {
+    if (out.length >= WIDGET_LINES) break;
+    if (b.spent > 0) out.push(gauge(b.family, b.spent, b.budget, 12));
+  }
+
+  return out.slice(0, WIDGET_LINES);
 }
