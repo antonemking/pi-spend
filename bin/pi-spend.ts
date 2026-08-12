@@ -12,17 +12,20 @@
  *   pi-spend burn            budget burn-down
  *   pi-spend log --json '{}' record an event from another runtime
  *   pi-spend db              print the database path
+ *   pi-spend demo            render sample data in a throwaway db
  *
  * flags: --since <7d|30d|YYYY-MM-DD>  --repo <name>  --json
  */
 
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { dbPath, loadConfig } from "../src/config.ts";
 import { Store, type SpendEvent } from "../src/store.ts";
 import { dashboard, sectionBy, budgetSection } from "../src/dashboard.ts";
 import { load, grandTotal, tokensOf, dailySeries } from "../src/aggregate.ts";
-import { fmtMoney, fmtTokens, sparkline } from "../src/charts.ts";
+import { dim, fmtMoney, fmtTokens, sparkline } from "../src/charts.ts";
 
 function parseSince(v: string | undefined): string | undefined {
   if (!v) return undefined;
@@ -146,9 +149,62 @@ switch (cmd) {
   case "db":
     console.log(dbPath());
     break;
+  case "demo": {
+    // Sample data in a throwaway database, so the charts can be judged
+    // before any real capture is wired up. Your own ledger is untouched.
+    const tmp = join(tmpdir(), `pi-spend-demo-${process.pid}.db`);
+    const store = new Store(tmp);
+    const day = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+    let n = 0;
+    const add = (
+      d: number, runtime: string, provider: string, model: string,
+      phase: string, label: string, inp: number, out: number, cr: number, cost: number,
+    ) => store.record({
+      runtime, session_id: `demo-${d}`, entry_id: `demo-${n++}`, at: day(d),
+      repo: "acme-api", phase, label, provider, model,
+      input: inp, output: out, cache_read: cr, cost,
+    });
+
+    for (let d = 13; d >= 0; d--) {
+      const busy = d % 7 !== 0 && d % 7 !== 6;
+      if (!busy) continue;
+      // workhorse grinds the build phase all day, flat rate
+      for (let i = 0; i < 4 + (d % 3); i++) {
+        add(d, "pi", "openai", "gpt-5.6", "build", `I-${1000 + d}`,
+            38_000 + i * 5000, 5200 + i * 800, 96_000, 0);
+      }
+      // adversary reviews each close, cents apiece
+      add(d, "script:review", "fireworks", "kimi-k3", "review", `I-${1000 + d}`,
+          31_000, 1700, 0, 0.021);
+      // reserve: scouting and decomposition, the judgment-dense gates
+      if (d % 3 === 0) {
+        add(d, "claude", "anthropic", "claude-sonnet-5", "scout", `L-00${d}`,
+            42_000, 7800, 180_000, 0.31);
+      }
+      if (d % 5 === 0) {
+        add(d, "claude", "anthropic", "claude-opus-5", "plan", `L-00${d}`,
+            28_000, 11_000, 210_000, 0.52);
+      }
+      // ...and a rescue in the build phase, which is the smell this tool exists to surface
+      if (d === 3 || d === 8) {
+        add(d, "claude", "anthropic", "claude-opus-5", "build", `I-${1000 + d}`,
+            51_000, 14_000, 240_000, 0.74);
+      }
+    }
+
+    console.log("\n" + dashboard(store, cfg, {}, 14) + "\n");
+    console.log(
+      dim("  demo data in a throwaway db, your ledger is untouched.\n" +
+          "  note the reserve showing up under `build`: that is the pattern\n" +
+          "  this tool exists to make visible.\n"),
+    );
+    store.close();
+    try { unlinkSync(tmp); } catch { /* best effort */ }
+    break;
+  }
   default:
     console.log(
-      "usage: pi-spend [dashboard|models|phases|repos|runtimes|days|burn|log|db] " +
+      "usage: pi-spend [dashboard|models|phases|repos|runtimes|days|burn|demo|log|db] " +
         "[--since 7d] [--repo name] [--json]",
     );
     process.exit(cmd === "help" ? 0 : 2);
