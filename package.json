@@ -1,0 +1,41 @@
+{
+  "name": "pi-spend",
+  "version": "0.1.0",
+  "description": "Phase-attributed spend telemetry for pi: know WHERE in your workflow the tokens went, across every runtime in your stack, with rich terminal charts and budget burn-down.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "pi-coding-agent",
+    "tokens",
+    "cost",
+    "usage",
+    "telemetry",
+    "budget",
+    "charts"
+  ],
+  "type": "module",
+  "license": "MIT",
+  "author": "Lorewood Labs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/antonemking/pi-spend.git"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "pi-spend": "./bin/pi-spend.ts"
+  },
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "files": [
+    "bin",
+    "extensions",
+    "src",
+    "integrations",
+    "README.md",
+    "LICENSE"
+  ]
+}
