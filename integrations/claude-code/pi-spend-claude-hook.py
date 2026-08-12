@@ -75,7 +75,17 @@ def load_prices(cfg):
     return prices
 
 
-def load_phase_rules(cfg):
+def load_phase_rules(cfg, root=None):
+    """Repo rules win over global ones: an Elixir server with a Swift client
+    divides its work nothing like a repo running a gated method. First match
+    wins, so order rules specific to general."""
+    if root:
+        try:
+            repo_cfg = json.loads((Path(root) / ".pi-spend.json").read_text())
+            if isinstance(repo_cfg.get("phaseRules"), list):
+                cfg = {**cfg, "phaseRules": repo_cfg["phaseRules"]}
+        except Exception:
+            pass
     rules = []
     for r in cfg.get("phaseRules") or []:
         if isinstance(r, dict) and r.get("match") and r.get("phase"):
@@ -150,20 +160,30 @@ def written_paths(records, root):
 
 
 def resolve_phase(root, has_state, records, rules):
-    """Same two signals the pi extension uses: explicit state, then writes."""
+    """Same two signals the pi extension uses: explicit state wins outright,
+    otherwise the phase this session wrote to most. A real session touches
+    several areas, and the first rule that happens to match is not the same
+    thing as the work that got done. Each path counts once, under the first
+    rule matching it, so order rules specific to general."""
     if has_state:
         hit = state_phase(root)
         if hit:
             return hit
-    paths = written_paths(records, str(root))
+    compiled = []
     for pattern, phase in rules:
         try:
-            rx = re.compile(pattern)
+            compiled.append((re.compile(pattern), phase))
         except re.error:
             continue
-        if any(rx.search(p) for p in paths):
-            return phase, ""
-    return "other", ""
+    tally = {}
+    for p in written_paths(records, str(root)):
+        for rx, phase in compiled:
+            if rx.search(p):
+                tally[phase] = tally.get(phase, 0) + 1
+                break
+    if not tally:
+        return "other", ""
+    return max(tally.items(), key=lambda kv: kv[1])[0], ""
 
 
 SCHEMA = """
@@ -195,7 +215,6 @@ def main():
 
     cfg = load_config()
     prices = load_prices(cfg)
-    rules = load_phase_rules(cfg)
 
     records = []
     for line in Path(transcript).read_text().splitlines():
@@ -209,6 +228,7 @@ def main():
     if not cwd:
         cwd = next((r.get("cwd") for r in records if r.get("cwd")), "")
     root, has_state = project_root(cwd)
+    rules = load_phase_rules(cfg, root)
     phase, label = resolve_phase(root, has_state, records, rules)
     repo = root.name
 

@@ -115,6 +115,38 @@ factory dashboard.
 }
 ```
 
+### Per-repo phase rules
+
+Phase rules are the one setting that cannot be global — an Elixir server with
+a Swift client divides its work nothing like a repo running a gated method.
+Drop a `.pi-spend.json` at a repo root and its rules replace the global set
+for that repo only:
+
+```jsonc
+{
+  "phaseRules": [
+    { "match": "^server/test/", "phase": "test" },
+    { "match": "^server/", "phase": "server" },
+    { "match": "^client/", "phase": "client" },
+    { "match": "^docs/", "phase": "docs" }
+  ]
+}
+```
+
+**A session's phase is the bucket it wrote to most**, not the first rule that
+happens to match — real sessions touch several areas, and rule order is not
+evidence about where the work went. Explicit workflow state still wins
+outright when present, since an in-progress issue is exact rather than
+inferred.
+
+Two things follow from that. Order rules **specific to general** (`^server/test/`
+before `^server/`), since each path counts once under the first rule matching
+it. And keep them at **one consistent level of granularity**: subdividing one
+area into four phases while leaving another whole hands every mixed session to
+the coarse bucket, because the fine-grained area's writes get split four ways.
+
+### Read-time evaluation
+
 Families **and billing are computed at read time**, so editing the rules
 re-buckets and re-values your entire history without re-capturing anything.
 Move a model from a subscription onto metered credits and one word in this

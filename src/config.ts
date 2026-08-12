@@ -87,6 +87,31 @@ export function dbPath(): string {
   return process.env.PI_SPEND_DB ?? join(spendHome(), "spend.db");
 }
 
+/**
+ * Per-repo overrides from `<root>/.pi-spend.json`.
+ *
+ * Phase rules are the part of this config that cannot be global: an Elixir
+ * server with a Swift client divides its work nothing like a repo running a
+ * gated method. A repo that defines `phaseRules` replaces the global set for
+ * itself; everything else still comes from the user-level config.
+ *
+ * Rules are first-match-wins, so order them specific to general:
+ * `^server/test/` must precede `^server/` or tests read as server work.
+ */
+export function loadRepoConfig(root: string, base: SpendConfig): SpendConfig {
+  try {
+    const path = join(root, ".pi-spend.json");
+    if (!existsSync(path)) return base;
+    const repo = JSON.parse(readFileSync(path, "utf8"));
+    return {
+      ...base,
+      ...(Array.isArray(repo.phaseRules) ? { phaseRules: repo.phaseRules } : {}),
+    };
+  } catch {
+    return base;
+  }
+}
+
 export function loadConfig(): SpendConfig {
   const home = spendHome();
   const path = join(home, "config.json");

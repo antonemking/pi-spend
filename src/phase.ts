@@ -70,11 +70,17 @@ export function inProgressIssue(root: string): KilnIssue | null {
 export class PhaseTracker {
   private writtenRel: string[] = [];
 
-  constructor(
-    private root: string,
-    private kiln: boolean,
-    private rules: PhaseRule[],
-  ) {}
+  // Written out rather than using parameter properties: Node runs .ts by
+  // stripping types only, and parameter properties need real transformation.
+  private root: string;
+  private kiln: boolean;
+  private rules: PhaseRule[];
+
+  constructor(root: string, kiln: boolean, rules: PhaseRule[]) {
+    this.root = root;
+    this.kiln = kiln;
+    this.rules = rules;
+  }
 
   observeWrite(path: string, cwd: string): void {
     try {
@@ -86,22 +92,34 @@ export class PhaseTracker {
     }
   }
 
+  /**
+   * Explicit workflow state wins outright: an in-progress issue is exact,
+   * not inferred. Otherwise the phase is whichever one the session wrote to
+   * *most*, because a real session touches several areas and the first rule
+   * that happens to match is not the same thing as the work that got done.
+   * Each path counts once, under the first rule that matches it, so order
+   * rules specific to general.
+   */
   resolve(): { phase: string; label: string } {
     if (this.kiln) {
       const issue = inProgressIssue(this.root);
       if (issue) return { phase: "build", label: issue.id };
     }
+    const compiled: { re: RegExp; phase: string }[] = [];
     for (const rule of this.rules) {
-      let re: RegExp;
       try {
-        re = new RegExp(rule.match);
+        compiled.push({ re: new RegExp(rule.match), phase: rule.phase });
       } catch {
-        continue;
-      }
-      if (this.writtenRel.some((p) => re.test(p))) {
-        return { phase: rule.phase, label: "" };
+        /* bad user regex, skip the rule */
       }
     }
-    return { phase: "other", label: "" };
+    const tally = new Map<string, number>();
+    for (const p of this.writtenRel) {
+      const hit = compiled.find((c) => c.re.test(p));
+      if (hit) tally.set(hit.phase, (tally.get(hit.phase) ?? 0) + 1);
+    }
+    if (!tally.size) return { phase: "other", label: "" };
+    const [phase] = [...tally.entries()].sort((a, b) => b[1] - a[1])[0];
+    return { phase, label: "" };
   }
 }

@@ -21,7 +21,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadConfig } from "../src/config.ts";
+import { loadConfig, loadRepoConfig } from "../src/config.ts";
 import { Store } from "../src/store.ts";
 import { dashboard, sessionWidget } from "../src/dashboard.ts";
 import { fmtMoney, fmtTokens } from "../src/charts.ts";
@@ -31,7 +31,7 @@ import { grandTotal, tokensOf } from "../src/aggregate.ts";
 const WRITE_TOOLS = new Set(["write", "edit", "multi_edit", "str_replace"]);
 
 export default function (pi: ExtensionAPI) {
-  const cfg = loadConfig();
+  let cfg = loadConfig();
   let store: Store | null = null;
   let tracker: PhaseTracker | null = null;
   let root = "";
@@ -47,6 +47,8 @@ export default function (pi: ExtensionAPI) {
     const found = findProjectRoot(cwd);
     root = found.root;
     repo = repoNameOf(found.root);
+    // A repo may define its own phase rules; its shape is not the global one.
+    cfg = loadRepoConfig(found.root, loadConfig());
     tracker = new PhaseTracker(found.root, found.kiln, cfg.phaseRules);
   }
 
